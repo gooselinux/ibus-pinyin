@@ -1,0 +1,1702 @@
+diff --git a/src/BopomofoEditor.cc b/src/BopomofoEditor.cc
+index 5d0eaeb..32becf4 100644
+--- a/src/BopomofoEditor.cc
++++ b/src/BopomofoEditor.cc
+@@ -310,7 +310,7 @@ BopomofoEditor::processNumberWithShift (guint keyval, guint keycode, guint modif
+ inline gboolean
+ BopomofoEditor::processBopomofo (guint keyval, guint keycode, guint modifiers)
+ {
+-    if (G_UNLIKELY (CMSHM_FILTER (modifiers) != 0))
++    if (G_UNLIKELY (cmshm_filter (modifiers) != 0))
+         return m_text ? TRUE : FALSE;
+ 
+     if (keyvalToBopomofo (keyval) == BOPOMOFO_ZERO)
+diff --git a/src/BopomofoEngine.cc b/src/BopomofoEngine.cc
+index 2d6a41c..3a89de7 100644
+--- a/src/BopomofoEngine.cc
++++ b/src/BopomofoEngine.cc
+@@ -27,8 +27,8 @@
+ #include "PunctEditor.h"
+ #include "ExtEditor.h"
+ #include "BopomofoEditor.h"
++#include "FallbackEditor.h"
+ #include "BopomofoEngine.h"
+-#include "HalfFullConverter.h"
+ #include "Config.h"
+ #include "Text.h"
+ #include "Util.h"
+@@ -89,7 +89,7 @@ BopomofoEngine::processKeyEvent (guint keyval, guint keycode, guint modifiers)
+     }
+ 
+     /* Toggle simp/trad Chinese Mode when hotkey Ctrl + Shift + F pressed */
+-    if (keyval == IBUS_F && SCMSHM_TEST (modifiers, (IBUS_SHIFT_MASK | IBUS_CONTROL_MASK))) {
++    if (keyval == IBUS_F && scmshm_test (modifiers, (IBUS_SHIFT_MASK | IBUS_CONTROL_MASK))) {
+         m_props.toggleModeSimp();
+         m_prev_pressed_key = IBUS_F;
+         return TRUE;
+@@ -98,7 +98,7 @@ BopomofoEngine::processKeyEvent (guint keyval, guint keycode, guint modifiers)
+     if (m_props.modeChinese ()) {
+         if (G_UNLIKELY (m_input_mode == MODE_INIT &&
+                         m_editors[MODE_INIT]->text ().empty () &&
+-                        (CMSHM_FILTER (modifiers)) == 0) &&
++                        (cmshm_filter (modifiers)) == 0) &&
+                         keyval == IBUS_grave) {
+             /* if BopomofoEditor is empty and get a grave key,
+              * switch current editor to PunctEditor */
+@@ -128,6 +128,34 @@ BopomofoEngine::focusIn (void)
+ }
+ 
+ void
++BopomofoEngine::focusOut (void)
++{
++    reset ();
++}
++
++void
++BopomofoEngine::reset (void)
++{
++    m_prev_pressed_key = IBUS_VoidSymbol;
++    m_input_mode = MODE_INIT;
++    for (gint i = 0; i < MODE_LAST; i++) {
++        m_editors[i]->reset ();
++    }
++    m_fallback_editor->reset ();
++}
++
++void
++BopomofoEngine::enable (void)
++{
++    m_props.reset ();
++}
++
++void
++BopomofoEngine::disable (void)
++{
++}
++
++void
+ BopomofoEngine::pageUp (void)
+ {
+     m_editors[m_input_mode]->pageUp ();
+diff --git a/src/BopomofoEngine.h b/src/BopomofoEngine.h
+index c413d25..06297b8 100644
+--- a/src/BopomofoEngine.h
++++ b/src/BopomofoEngine.h
+@@ -32,30 +32,17 @@ public:
+     BopomofoEngine (IBusEngine *engine);
+     ~BopomofoEngine (void);
+ 
++    // virtual functions
+     gboolean processKeyEvent (guint keyval, guint keycode, guint modifiers);
+     void focusIn (void);
+-    void focusOut (void) {
+-        reset ();
+-    }
+-
+-    void reset (void) {
+-        m_prev_pressed_key = IBUS_VoidSymbol;
+-        m_input_mode = MODE_INIT;
+-        for (gint i = 0; i < MODE_LAST; i++) {
+-            m_editors[i]->reset ();
+-        }
+-        m_fallback_editor->reset ();
+-    }
+-
+-    void enable (void) {
+-        m_props.reset ();
+-    }
+-    void disable (void) {}
++    void focusOut (void);
++    void reset (void);
++    void enable (void);
++    void disable (void);
+     void pageUp (void);
+     void pageDown (void);
+     void cursorUp (void);
+     void cursorDown (void);
+-
+     gboolean propertyActivate (const gchar *prop_name, guint prop_state);
+     void candidateClicked (guint index, guint button, guint state);
+ 
+diff --git a/src/Bus.h b/src/Bus.h
+index 518a62f..4ed9932 100644
+--- a/src/Bus.h
++++ b/src/Bus.h
+@@ -28,14 +28,15 @@ namespace PY {
+ 
+ class Bus : Object {
+ public:
+-    Bus (void) : Object (ibus_bus_new ()) {
+-    }
++    Bus (void) : Object (ibus_bus_new ()) { }
+ 
+-    bool isConnected (void) {
++    bool isConnected (void)
++    {
+         return ibus_bus_is_connected (*this);
+     }
+ 
+-    operator IBusBus * (void) const {
++    operator IBusBus * (void) const
++    {
+         return get<IBusBus> ();
+     }
+ };
+diff --git a/src/Config.cc b/src/Config.cc
+index 13bf962..4e40fac 100644
+--- a/src/Config.cc
++++ b/src/Config.cc
+@@ -273,8 +273,8 @@ static const struct {
+     { "CorrectPinyin_VE_UE",    PINYIN_CORRECT_V_TO_U,      TRUE },
+ };
+ 
+-PinyinConfig::PinyinConfig (Bus & bus, const std::string & name)
+-    : Config (bus, name)
++PinyinConfig::PinyinConfig (Bus & bus)
++    : Config (bus, "Pinyin")
+ {
+ }
+ 
+diff --git a/src/Config.h b/src/Config.h
+index 64a783c..f79ae8a 100644
+--- a/src/Config.h
++++ b/src/Config.h
+@@ -37,22 +37,22 @@ protected:
+     virtual ~Config (void);
+ 
+ public:
+-    guint option (void) { return m_option & m_option_mask; }
+-    guint orientation (void) { return m_orientation; }
+-    guint pageSize (void) { return m_page_size; }
+-    gboolean shiftSelectCandidate (void) { return m_shift_select_candidate; }
+-    gboolean minusEqualPage (void) { return m_minus_equal_page; }
+-    gboolean commaPeriodPage (void) { return m_comma_period_page; }
+-    gboolean autoCommit (void) { return m_auto_commit; }
+-    gboolean doublePinyin (void) { return m_double_pinyin; }
+-    gint doublePinyinSchema (void) { return m_double_pinyin_schema; }
+-    gboolean doublePinyinShowRaw (void) { return m_double_pinyin_show_raw; }
+-    gboolean initChinese (void) { return m_init_chinese; }
+-    gboolean initFull (void) { return m_init_full; }
+-    gboolean initFullPunct (void) { return m_init_full_punct; }
+-    gboolean initSimpChinese (void) { return m_init_simp_chinese; }
+-    gboolean specialPhrases (void) { return m_special_phrases; }
+-    gint bopomofoKeyboardMapping (void) { return m_bopomofoKeyboardMapping; }
++    guint option (void) const                   { return m_option & m_option_mask; }
++    guint orientation (void) const              { return m_orientation; }
++    guint pageSize (void) const                 { return m_page_size; }
++    gboolean shiftSelectCandidate (void) const  { return m_shift_select_candidate; }
++    gboolean minusEqualPage (void) const        { return m_minus_equal_page; }
++    gboolean commaPeriodPage (void) const       { return m_comma_period_page; }
++    gboolean autoCommit (void) const            { return m_auto_commit; }
++    gboolean doublePinyin (void) const          { return m_double_pinyin; }
++    gint doublePinyinSchema (void) const        { return m_double_pinyin_schema; }
++    gboolean doublePinyinShowRaw (void) const   { return m_double_pinyin_show_raw; }
++    gboolean initChinese (void) const           { return m_init_chinese; }
++    gboolean initFull (void) const              { return m_init_full; }
++    gboolean initFullPunct (void) const         { return m_init_full_punct; }
++    gboolean initSimpChinese (void) const       { return m_init_simp_chinese; }
++    gboolean specialPhrases (void) const        { return m_special_phrases; }
++    gint bopomofoKeyboardMapping (void) const   { return m_bopomofoKeyboardMapping; }
+ 
+ protected:
+     bool read (const std::string & name, bool defval);
+@@ -101,7 +101,7 @@ public:
+     static PinyinConfig & instance (void) { return *m_instance; }
+ 
+ protected:
+-    PinyinConfig (Bus & bus, const std::string & name = "Pinyin");
++    PinyinConfig (Bus & bus);
+     virtual void readDefaultValues (void);
+ 
+     virtual gboolean valueChanged (const std::string & section,
+diff --git a/src/Database.h b/src/Database.h
+index ce0f418..6b0c4bd 100644
+--- a/src/Database.h
++++ b/src/Database.h
+@@ -70,7 +70,7 @@ public:
+     void conditionsDouble (void);
+     void conditionsTriple (void);
+ 
+-    static Database & instance (void) {return m_instance; }
++    static Database & instance (void) { return m_instance; }
+ 
+ private:
+     gboolean init (void);
+diff --git a/src/DoublePinyinEditor.cc b/src/DoublePinyinEditor.cc
+index 6ad064e..aae4812 100644
+--- a/src/DoublePinyinEditor.cc
++++ b/src/DoublePinyinEditor.cc
+@@ -473,7 +473,7 @@ DoublePinyinEditor::processKeyEvent (guint keyval, guint keycode, guint modifier
+ {
+     /* handle ';' key */
+     if (G_UNLIKELY (keyval == IBUS_semicolon)) {
+-        if (CMSHM_FILTER (modifiers) == 0) {
++        if (cmshm_filter (modifiers) == 0) {
+             if (insert (keyval))
+                 return TRUE;
+         }
+diff --git a/src/DynamicSpecialPhrase.cc b/src/DynamicSpecialPhrase.cc
+index e70cf3b..7d406e1 100644
+--- a/src/DynamicSpecialPhrase.cc
++++ b/src/DynamicSpecialPhrase.cc
+@@ -18,7 +18,6 @@
+  * along with this program; if not, write to the Free Software
+  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+-#include <ctime>
+ #include <cstdio>
+ #include "DynamicSpecialPhrase.h"
+ 
+diff --git a/src/Editor.h b/src/Editor.h
+index b1e2093..fa698af 100644
+--- a/src/Editor.h
++++ b/src/Editor.h
+@@ -50,68 +50,91 @@ public:
+     virtual void reset (void);
+     virtual void candidateClicked (guint index, guint button, guint state);
+ 
+-    const String & text (void) const { return m_text; }
+-    void setText (const String & text, guint cursor) {
++    const String & text (void) const
++    {
++        return m_text;
++    }
++
++    void setText (const String & text, guint cursor)
++    {
+         m_text = text;
+         m_cursor = cursor;
+     }
+ 
+     /* signals */
+-    signal <void (Text &)> & signalCommitText (void) { return m_signal_commit_text; }
+-    signal <void (Text &, guint, gboolean)> & signalUpdatePreeditText (void) { return m_signal_update_preedit_text; }
+-    signal <void ()> & signalShowPreeditText (void) { return m_signal_show_preedit_text; }
+-    signal <void ()> & signalHidePreeditText (void) { return m_signal_hide_preedit_text; }
+-    signal <void (Text &, gboolean)> & signalUpdateAuxiliaryText (void) { return m_signal_update_auxiliary_text; }
+-    signal <void ()> & signalShowAuxiliaryText (void) { return m_signal_show_auxiliary_text; }
+-    signal <void ()> & signalHideAuxiliaryText (void) { return m_signal_hide_auxiliary_text; }
+-    signal <void (LookupTable &, gboolean)> & signalUpdateLookupTable (void) { return m_signal_update_lookup_table; }
+-    signal <void (LookupTable &, gboolean)> & signalUpdateLookupTableFast (void) { return m_signal_update_lookup_table_fast; }
+-    signal <void ()> & signalShowLookupTable (void) { return m_signal_show_lookup_table; }
+-    signal <void ()> & signalHideLookupTable (void) { return m_signal_hide_lookup_table; }
++    signal <void (Text &)> & signalCommitText (void)    { return m_signal_commit_text; }
++
++    signal <void (Text &, guint, gboolean)> & signalUpdatePreeditText (void)
++                                                        { return m_signal_update_preedit_text; }
++    signal <void ()> & signalShowPreeditText (void)     { return m_signal_show_preedit_text; }
++    signal <void ()> & signalHidePreeditText (void)     { return m_signal_hide_preedit_text; }
++
++    signal <void (Text &, gboolean)> & signalUpdateAuxiliaryText (void)
++                                                        { return m_signal_update_auxiliary_text; }
++    signal <void ()> & signalShowAuxiliaryText (void)   { return m_signal_show_auxiliary_text; }
++    signal <void ()> & signalHideAuxiliaryText (void)   { return m_signal_hide_auxiliary_text; }
++
++    signal <void (LookupTable &, gboolean)> & signalUpdateLookupTable (void)
++                                                        { return m_signal_update_lookup_table; }
++    signal <void (LookupTable &, gboolean)> & signalUpdateLookupTableFast (void)
++                                                        { return m_signal_update_lookup_table_fast; }
++    signal <void ()> & signalShowLookupTable (void)     { return m_signal_show_lookup_table; }
++    signal <void ()> & signalHideLookupTable (void)     { return m_signal_hide_lookup_table; }
+ 
+ protected:
+     /* methods */
+-    void commitText (Text & text) {
++    void commitText (Text & text) const
++    {
+         m_signal_commit_text (text);
+     }
+ 
+-    void updatePreeditText (Text & text, guint cursor, gboolean visible) {
++    void updatePreeditText (Text & text, guint cursor, gboolean visible) const
++    {
+         m_signal_update_preedit_text (text, cursor, visible);
+     }
+ 
+-    void showPreeditText (void) {
++    void showPreeditText (void) const
++    {
+         m_signal_show_preedit_text ();
+     }
+ 
+-    void hidePreeditText (void) {
++    void hidePreeditText (void) const
++    {
+         m_signal_hide_preedit_text ();
+     }
+ 
+-    void updateAuxiliaryText (Text & text, gboolean visible) {
++    void updateAuxiliaryText (Text & text, gboolean visible) const
++    {
+         m_signal_update_auxiliary_text (text, visible);
+     }
+ 
+-    void showAuxiliaryText (void) {
++    void showAuxiliaryText (void) const
++    {
+         m_signal_show_auxiliary_text ();
+     }
+ 
+-    void hideAuxiliaryText (void) {
++    void hideAuxiliaryText (void) const
++    {
+         m_signal_hide_auxiliary_text ();
+     }
+ 
+-    void updateLookupTable (LookupTable & table, gboolean visible) {
++    void updateLookupTable (LookupTable & table, gboolean visible) const
++    {
+         m_signal_update_lookup_table (table, visible);
+     }
+ 
+-    void updateLookupTableFast (LookupTable & table, gboolean visible) {
++    void updateLookupTableFast (LookupTable & table, gboolean visible) const
++    {
+         m_signal_update_lookup_table_fast (table, visible);
+     }
+ 
+-    void showLookupTable (void) {
++    void showLookupTable (void) const
++    {
+         m_signal_show_lookup_table ();
+     }
+ 
+-    void hideLookupTable (void) {
++    void hideLookupTable (void) const
++    {
+         m_signal_hide_lookup_table ();
+     }
+ 
+diff --git a/src/Engine.cc b/src/Engine.cc
+index f9c11ac..2dd1d17 100644
+--- a/src/Engine.cc
++++ b/src/Engine.cc
+@@ -19,8 +19,6 @@
+  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+ 
+-#include <cstring>
+-#include <ibus.h>
+ #include "Engine.h"
+ #include "PinyinEngine.h"
+ #include "BopomofoEngine.h"
+diff --git a/src/Engine.h b/src/Engine.h
+index 17f1e18..297acaf 100644
+--- a/src/Engine.h
++++ b/src/Engine.h
+@@ -24,12 +24,9 @@
+ #include <ibus.h>
+ 
+ #include "Pointer.h"
+-#include "Database.h"
+ #include "LookupTable.h"
+ #include "Property.h"
+-#include "Config.h"
+ #include "Editor.h"
+-#include "FallbackEditor.h"
+ 
+ namespace PY {
+ 
+@@ -40,76 +37,86 @@ GType   ibus_pinyin_engine_get_type    (void);
+ 
+ class Engine {
+ public:
+-    Engine (IBusEngine *engine) : m_engine (engine) {
+-    }
+-
++    Engine (IBusEngine *engine) : m_engine (engine) { }
+     virtual ~Engine (void);
+ 
++    // virtual functions
+     virtual gboolean processKeyEvent (guint keyval, guint keycode, guint modifiers) = 0;
+     virtual void focusIn (void) = 0;
+     virtual void focusOut (void) = 0;
+     virtual void reset (void) = 0;
+-
+     virtual void enable (void) = 0;
+     virtual void disable (void) = 0;
+     virtual void pageUp (void) = 0;
+     virtual void pageDown (void) = 0;
+     virtual void cursorUp (void) = 0;
+     virtual void cursorDown (void) = 0;
+-
+     virtual gboolean propertyActivate (const gchar *prop_name, guint prop_state) = 0;
+     virtual void candidateClicked (guint index, guint button, guint state) = 0;
+ 
+ protected:
+-    void commitText (Text & text) {
++    void commitText (Text & text) const
++    {
+         ibus_engine_commit_text (m_engine, text);
+     }
+ 
+-    void updatePreeditText (Text & text, guint cursor, gboolean visible) {
++    void updatePreeditText (Text & text, guint cursor, gboolean visible) const
++    {
+         ibus_engine_update_preedit_text (m_engine, text, cursor, visible);
+     }
+ 
+-    void showPreeditText (void) {
++    void showPreeditText (void) const
++    {
+         ibus_engine_show_preedit_text (m_engine);
+     }
+ 
+-    void hidePreeditText (void) {
++    void hidePreeditText (void) const
++    {
+         ibus_engine_hide_preedit_text (m_engine);
+     }
+ 
+-    void updateAuxiliaryText (Text & text, gboolean visible) {
++    void updateAuxiliaryText (Text & text, gboolean visible) const
++    {
+         ibus_engine_update_auxiliary_text (m_engine, text, visible);
+     }
+ 
+-    void showAuxiliaryText (void) {
++    void showAuxiliaryText (void) const
++    {
+         ibus_engine_show_auxiliary_text (m_engine);
+     }
+ 
+-    void hideAuxiliaryText (void) {
++    void hideAuxiliaryText (void) const
++    {
+         ibus_engine_hide_auxiliary_text (m_engine);
+     }
+ 
+-    void updateLookupTable (LookupTable &table, gboolean visible) {
++    void updateLookupTable (LookupTable &table, gboolean visible) const
++    {
+         ibus_engine_update_lookup_table (m_engine, table, visible);
+     }
+ 
+-    void updateLookupTableFast (LookupTable &table, gboolean visible) {
++    void updateLookupTableFast (LookupTable &table, gboolean visible) const
++    {
+         ibus_engine_update_lookup_table_fast (m_engine, table, visible);
+     }
+ 
+-    void showLookupTable (void) {
++    void showLookupTable (void) const
++    {
+         ibus_engine_show_lookup_table (m_engine);
+     }
+ 
+-    void hideLookupTable (void) {
++    void hideLookupTable (void) const
++    {
+         ibus_engine_hide_lookup_table (m_engine);
+     }
+ 
+-    void registerProperties (PropList & props) {
++    void registerProperties (PropList & props) const
++    {
+         ibus_engine_register_properties (m_engine, props);
+     }
+ 
+-    void updateProperty (Property & prop) {
++    void updateProperty (Property & prop) const
++    {
+         ibus_engine_update_property (m_engine, prop);
+     }
+ 
+diff --git a/src/FallbackEditor.cc b/src/FallbackEditor.cc
+index c93f923..d95ff53 100644
+--- a/src/FallbackEditor.cc
++++ b/src/FallbackEditor.cc
+@@ -163,7 +163,7 @@ FallbackEditor::processPunctForTraditionalChinese (guint keyval, guint keycode,
+ inline gboolean
+ FallbackEditor::processPunct (guint keyval, guint keycode, guint modifiers)
+ {
+-    guint cmshm_modifiers = CMSHM_FILTER (modifiers);
++    guint cmshm_modifiers = cmshm_filter (modifiers);
+ 
+     if (G_UNLIKELY (keyval == IBUS_period && cmshm_modifiers == IBUS_CONTROL_MASK)) {
+         m_props.toggleModeFullPunct ();
+diff --git a/src/FallbackEditor.h b/src/FallbackEditor.h
+index 9994f8c..3e45c30 100644
+--- a/src/FallbackEditor.h
++++ b/src/FallbackEditor.h
+@@ -32,33 +32,38 @@ public:
+         : Editor (props, config),
+           m_quote (TRUE),
+           m_double_quote (TRUE),
+-          m_prev_committed_char (0) {}
++          m_prev_committed_char (0) { }
+ 
+     gboolean processKeyEvent (guint keyval, guint keycode, guint modifiers);
+     void reset (void);
+ 
+-    void setPrevCommittedChar (gunichar ch) {
++    void setPrevCommittedChar (gunichar ch)
++    {
+         m_prev_committed_char = ch;
+     }
+ 
+ private:
+-    void commit (gchar ch) {
++    void commit (gchar ch)
++    {
+         gchar str[2] = {ch, 0};
+         StaticText text (str);
+         commitText (text);
+     }
+ 
+-    void commit (gunichar ch) {
++    void commit (gunichar ch)
++    {
+         Text text (ch);
+         commitText (text);
+     }
+ 
+-    void commit (const gchar *str) {
++    void commit (const gchar *str)
++    {
+         StaticText text (str);
+         commitText (text);
+     }
+ 
+-    void commit (const String &str) {
++    void commit (const String &str)
++    {
+         commit ((const gchar *)str);
+     }
+ 
+diff --git a/src/LookupTable.h b/src/LookupTable.h
+index 161f922..36b8cc2 100644
+--- a/src/LookupTable.h
++++ b/src/LookupTable.h
+@@ -35,26 +35,25 @@ public:
+                  gboolean round = FALSE)
+         : Object (ibus_lookup_table_new (page_size, cursor_pos, cursor_visible, round)) { }
+ 
+-    guint pageSize (void) { return ibus_lookup_table_get_page_size (*this); }
+-    guint orientation (void) { return ibus_lookup_table_get_orientation (*this); }
+-    guint cursorPos (void) { return ibus_lookup_table_get_cursor_pos (*this); }
+-    guint size (void) { return ibus_lookup_table_get_number_of_candidates (*this); }
++    guint pageSize (void)       { return ibus_lookup_table_get_page_size (*this); }
++    guint orientation (void)    { return ibus_lookup_table_get_orientation (*this); }
++    guint cursorPos (void)      { return ibus_lookup_table_get_cursor_pos (*this); }
++    guint size (void)           { return ibus_lookup_table_get_number_of_candidates (*this); }
+ 
+-    gboolean pageUp (void) { return ibus_lookup_table_page_up (*this); }
+-    gboolean pageDown (void) { return ibus_lookup_table_page_down (*this); }
+-    gboolean cursorUp (void) { return ibus_lookup_table_cursor_up (*this); }
+-    gboolean cursorDown (void) { return ibus_lookup_table_cursor_down (*this); }
++    gboolean pageUp (void)      { return ibus_lookup_table_page_up (*this); }
++    gboolean pageDown (void)    { return ibus_lookup_table_page_down (*this); }
++    gboolean cursorUp (void)    { return ibus_lookup_table_cursor_up (*this); }
++    gboolean cursorDown (void)  { return ibus_lookup_table_cursor_down (*this); }
+ 
+-    void setPageSize (guint size) { ibus_lookup_table_set_page_size (*this, size); }
+-    void setCursorPos (guint pos) { ibus_lookup_table_set_cursor_pos (*this, pos); }
+-    void setOrientation (gint orientation) { ibus_lookup_table_set_orientation (*this, orientation); }
+-    void clear (void) { ibus_lookup_table_clear (*this); }
++    void setPageSize (guint size)           { ibus_lookup_table_set_page_size (*this, size); }
++    void setCursorPos (guint pos)           { ibus_lookup_table_set_cursor_pos (*this, pos); }
++    void setOrientation (gint orientation)  { ibus_lookup_table_set_orientation (*this, orientation); }
++    void clear (void)                       { ibus_lookup_table_clear (*this); }
+ 
+-    void appendCandidate (IBusText *text) {
+-        ibus_lookup_table_append_candidate (*this, text);
+-    }
++    void appendCandidate (IBusText *text)   { ibus_lookup_table_append_candidate (*this, text); }
+ 
+-    operator IBusLookupTable * (void) const {
++    operator IBusLookupTable * (void) const
++    {
+         return get<IBusLookupTable> ();
+     }
+ };
+diff --git a/src/Object.h b/src/Object.h
+index 9ecaedc..a30ac9c 100644
+--- a/src/Object.h
++++ b/src/Object.h
+@@ -29,16 +29,19 @@ namespace PY {
+ class Object {
+ protected:
+     template <typename T>
+-    Object (T *p) : m_p ((GObject *)p) {
++    Object (T *p) : m_p ((GObject *)p)
++    {
+         g_assert (get <GObject *>() != NULL);
+     }
+ 
+-    operator GObject * (void) const {
++    operator GObject * (void) const
++    {
+         return m_p;
+     }
+ 
+     template <typename T>
+-    T * get (void) const {
++    T * get (void) const
++    {
+         return (T *) (GObject *) m_p;
+     }
+ 
+diff --git a/src/PhoneticEditor.cc b/src/PhoneticEditor.cc
+index 951f64d..d3075aa 100644
+--- a/src/PhoneticEditor.cc
++++ b/src/PhoneticEditor.cc
+@@ -40,7 +40,7 @@ PhoneticEditor::processSpace (guint keyval, guint keycode, guint modifiers)
+ {
+     if (!m_text)
+         return FALSE;
+-    if (CMSHM_FILTER (modifiers) != 0)
++    if (cmshm_filter (modifiers) != 0)
+         return TRUE;
+     if (m_lookup_table.size () != 0) {
+         selectCandidate (m_lookup_table.cursorPos ());
+@@ -58,7 +58,7 @@ PhoneticEditor::processFunctionKey (guint keyval, guint keycode, guint modifiers
+         return FALSE;
+ 
+     /* ignore numlock */
+-    modifiers = CMSHM_FILTER (modifiers);
++    modifiers = cmshm_filter (modifiers);
+ 
+     if (modifiers != 0 && modifiers != IBUS_CONTROL_MASK)
+         return TRUE;
+@@ -203,15 +203,20 @@ PhoneticEditor::processKeyEvent (guint keyval, guint keycode, guint modifiers)
+ }
+ 
+ gboolean
+-PhoneticEditor::updateSpecialPhrases (void) {
++PhoneticEditor::updateSpecialPhrases (void)
++{
++    guint size = m_special_phrases.size ();
++    m_special_phrases.clear ();
++
++    if (!m_config.specialPhrases ())
++        return FALSE;
++
+     if (!m_selected_special_phrase.empty ())
+         return FALSE;
+ 
+-    guint size = m_special_phrases.size ();
+     guint begin = m_phrase_editor.cursorInChar ();
+     guint end = m_cursor;
+ 
+-    m_special_phrases.clear ();
+     if (begin < end) {
+         SpecialPhraseTable::instance ().lookup (
+             m_text.substr (begin, m_cursor - begin),
+diff --git a/src/PhoneticEditor.h b/src/PhoneticEditor.h
+index 36178ca..6d765c8 100644
+--- a/src/PhoneticEditor.h
++++ b/src/PhoneticEditor.h
+@@ -21,9 +21,7 @@
+ #ifndef __PY_PHONETIC_EDITOR_H_
+ #define __PY_PHONETIC_EDITOR_H_
+ 
+-#include <glib.h>
+ #include "Editor.h"
+-#include "Database.h"
+ #include "PinyinParser.h"
+ #include "PhraseEditor.h"
+ #include "SpecialPhraseTable.h"
+@@ -62,15 +60,18 @@ protected:
+     void commit (const gchar *str);
+ 
+     /* inline functions */
+-    void updatePhraseEditor () {
++    void updatePhraseEditor ()
++    {
+         m_phrase_editor.update (m_pinyin);
+     }
+ 
+-    const gchar * textAfterPinyin () const {
++    const gchar * textAfterPinyin () const
++    {
+         return (const gchar *)m_text + m_pinyin_len;
+     }
+ 
+-    const gchar * textAfterPinyin (guint i) const {
++    const gchar * textAfterPinyin (guint i) const
++    {
+         g_assert (i <= m_pinyin.size ());
+         if ( G_UNLIKELY (i == 0))
+             return m_text;
+@@ -78,7 +79,8 @@ protected:
+         return (const gchar *)m_text + m_pinyin[i].begin + m_pinyin[i].len;
+     }
+ 
+-    const gchar * textAfterCursor () const {
++    const gchar * textAfterCursor () const
++    {
+         return (const gchar *)m_text + m_cursor;
+     }
+ 
+diff --git a/src/Phrase.h b/src/Phrase.h
+index e39bf40..45a43e1 100644
+--- a/src/Phrase.h
++++ b/src/Phrase.h
+@@ -38,18 +38,21 @@ struct Phrase {
+     } pinyin_id[MAX_PHRASE_LEN];
+     guint len;
+ 
+-    void reset (void) {
++    void reset (void)
++    {
+         phrase[0] = 0;
+         freq = 0;
+         user_freq = 0;
+         len = 0;
+     }
+ 
+-    gboolean empty (void) const {
++    gboolean empty (void) const
++    {
+         return len == 0;
+     }
+ 
+-    Phrase & operator += (const Phrase & a) {
++    Phrase & operator += (const Phrase & a)
++    {
+         g_assert (len + a.len <= MAX_PHRASE_LEN);
+         g_strlcat (phrase, a.phrase, sizeof (phrase));
+         std::memcpy (pinyin_id + len, a.pinyin_id, a.len << 1);
+@@ -57,7 +60,8 @@ struct Phrase {
+         return *this;
+     }
+ 
+-    operator const gchar * (void) const {
++    operator const gchar * (void) const
++    {
+         return phrase;
+     }
+ 
+diff --git a/src/PhraseEditor.h b/src/PhraseEditor.h
+index 2b59dcd..ef9fb4f 100644
+--- a/src/PhraseEditor.h
++++ b/src/PhraseEditor.h
+@@ -36,20 +36,28 @@ public:
+     PhraseEditor (PinyinProperties & props, Config & config);
+     ~PhraseEditor (void);
+ 
+-    const String & selectedString (void) const { return m_selected_string; }
+-    const PinyinArray & pinyin (void) const { return m_pinyin; }
++    const String & selectedString (void) const  { return m_selected_string; }
++    const PinyinArray & pinyin (void) const     { return m_pinyin; }
+     const PhraseArray & candidates (void) const { return m_candidates; }
+-    guint cursor (void) const { return m_cursor; }
+-    guint cursorInChar (void) const { return m_cursor == 0 ? 0 : m_pinyin[m_cursor - 1].begin + m_pinyin[m_cursor - 1].len; }
+-    gboolean pinyinExistsAfterCursor (void) const {
++    guint cursor (void) const                   { return m_cursor; }
++
++    guint cursorInChar (void) const
++    {
++        return m_cursor == 0 ? 0 : m_pinyin[m_cursor - 1].begin + m_pinyin[m_cursor - 1].len;
++    }
++
++    gboolean pinyinExistsAfterCursor (void) const
++    {
+         return m_pinyin.size () > m_cursor;
+     }
+ 
+-    const Phrase & candidate (guint i) const {
++    const Phrase & candidate (guint i) const
++    {
+         return m_candidates[i];
+     }
+ 
+-    gboolean fillCandidates (void) {
++    gboolean fillCandidates (void)
++    {
+         if (G_UNLIKELY (m_query.get () == NULL)) {
+             return FALSE;
+         }
+@@ -64,16 +72,19 @@ public:
+         return ret > 0 ? TRUE : FALSE;
+     }
+ 
+-    const PhraseArray & candidate0 (void) const {
++    const PhraseArray & candidate0 (void) const
++    {
+         return m_candidate_0_phrases;
+     }
+ 
+-    gboolean candidateIsUserPhease (guint i) const {
++    gboolean candidateIsUserPhease (guint i) const
++    {
+         const Phrase & phrase = m_candidates[i];
+         return phrase.len > 1 && phrase.user_freq > 0 && phrase.freq == 0;
+     }
+ 
+-    gboolean unselectCandidates (void) {
++    gboolean unselectCandidates (void)
++    {
+         if (m_cursor == 0) {
+             return FALSE;
+         }
+@@ -86,7 +97,8 @@ public:
+         }
+     }
+ 
+-    void reset (void) {
++    void reset (void)
++    {
+         m_candidates.clear ();
+         m_selected_phrases.clear ();
+         m_selected_string.truncate (0);
+@@ -99,20 +111,19 @@ public:
+     gboolean update (const PinyinArray &pinyin);
+     gboolean selectCandidate (guint i);
+     gboolean resetCandidate (guint i);
+-    void commit (void) {
+-    #if 0
+-        m_selected_phrases.insert (m_selected_phrases.end (),
+-                    m_candidate_0_phrases.begin (), m_candidate_0_phrases.end ());
+-    #endif
++    void commit (void)
++    {
+         Database::instance ().commit (m_selected_phrases);
+         reset ();
+     }
+ 
+-    gboolean empty (void) const {
++    gboolean empty (void) const
++    {
+         return m_selected_string.empty () && m_candidate_0_phrases.empty ();
+     }
+ 
+-    operator gboolean (void) const {
++    operator gboolean (void) const
++    {
+         return !empty ();
+     }
+ 
+diff --git a/src/PinyinArray.h b/src/PinyinArray.h
+index 5dbc21b..2377ae6 100644
+--- a/src/PinyinArray.h
++++ b/src/PinyinArray.h
+@@ -32,32 +32,38 @@ struct PinyinSegment {
+     guint len;
+ 
+     PinyinSegment (const Pinyin *pinyin = NULL, guint begin = 0, guint len = 0)
+-        : pinyin (pinyin), begin (begin), len (len) {}
++        : pinyin (pinyin), begin (begin), len (len) { }
+ 
+-    operator const Pinyin * (void) const {
++    operator const Pinyin * (void) const
++    {
+         return pinyin;
+     }
+ 
+-    const Pinyin * operator-> (void) const {
++    const Pinyin * operator-> (void) const
++    {
+         return pinyin;
+     }
+ 
+-    gboolean operator == (const PinyinSegment & p) const {
++    gboolean operator == (const PinyinSegment & p) const
++    {
+         return (pinyin == p.pinyin) && (begin == p.begin) && (len == p.len);
+     }
+ 
+-    gboolean operator == (const Pinyin *p) const {
++    gboolean operator == (const Pinyin *p) const
++    {
+         return pinyin == p;
+     }
+ };
+ 
+ class PinyinArray: public std::vector<PinyinSegment> {
+ public:
+-    PinyinArray (guint init_size = 0) {
++    PinyinArray (guint init_size = 0)
++    {
+         std::vector<PinyinSegment>::reserve (init_size);
+     }
+ 
+-    void append (const Pinyin *pinyin, guint begin, guint len) {
++    void append (const Pinyin *pinyin, guint begin, guint len)
++    {
+         push_back (PinyinSegment (pinyin, begin, len));
+     }
+ };
+diff --git a/src/PinyinEditor.cc b/src/PinyinEditor.cc
+index fa92282..08c116d 100644
+--- a/src/PinyinEditor.cc
++++ b/src/PinyinEditor.cc
+@@ -37,7 +37,7 @@ PinyinEditor::PinyinEditor (PinyinProperties & props, Config & config)
+ inline gboolean
+ PinyinEditor::processPinyin (guint keyval, guint keycode, guint modifiers)
+ {
+-    if (G_UNLIKELY (CMSHM_FILTER (modifiers) != 0))
++    if (G_UNLIKELY (cmshm_filter (modifiers) != 0))
+         return m_text ? TRUE : FALSE;
+ 
+     return insert (keyval);
+@@ -81,7 +81,7 @@ PinyinEditor::processPunct (guint keyval, guint keycode, guint modifiers)
+     if (m_text.empty ())
+         return FALSE;
+ 
+-    if (CMSHM_FILTER (modifiers) != 0)
++    if (cmshm_filter (modifiers) != 0)
+         return TRUE;
+ 
+     switch (keyval) {
+@@ -130,7 +130,7 @@ PinyinEditor::processFunctionKey (guint keyval, guint keycode, guint modifiers)
+         return FALSE;
+ 
+     /* ignore numlock */
+-    modifiers = CMSHM_FILTER (modifiers);
++    modifiers = cmshm_filter (modifiers);
+ 
+     if (modifiers != 0 && modifiers != IBUS_CONTROL_MASK)
+         return TRUE;
+diff --git a/src/PinyinEditor.h b/src/PinyinEditor.h
+index d4b81f6..696a93a 100644
+--- a/src/PinyinEditor.h
++++ b/src/PinyinEditor.h
+@@ -46,8 +46,8 @@ protected:
+     void updatePreeditText (void);
+ 
+     virtual gboolean processKeyEvent (guint keyval, guint keycode, guint modifiers);
+-    virtual void updateAuxiliaryTextBefore (String &buffer) {};
+-    virtual void updateAuxiliaryTextAfter  (String &buffer) {};
++    virtual void updateAuxiliaryTextBefore (String &buffer) { };
++    virtual void updateAuxiliaryTextAfter  (String &buffer) { };
+ };
+ 
+ };
+diff --git a/src/PinyinEngine.cc b/src/PinyinEngine.cc
+index 64b6982..ee151fc 100644
+--- a/src/PinyinEngine.cc
++++ b/src/PinyinEngine.cc
+@@ -27,8 +27,8 @@
+ #include "ExtEditor.h"
+ #include "FullPinyinEditor.h"
+ #include "DoublePinyinEditor.h"
++#include "FallbackEditor.h"
+ #include "PinyinEngine.h"
+-#include "HalfFullConverter.h"
+ #include "Config.h"
+ #include "Text.h"
+ #include "Util.h"
+@@ -91,7 +91,7 @@ PinyinEngine::processKeyEvent (guint keyval, guint keycode, guint modifiers)
+     }
+ 
+     /* Toggle simp/trad Chinese Mode when hotkey Ctrl + Shift + F pressed */
+-    if (keyval == IBUS_F && SCMSHM_TEST (modifiers, (IBUS_SHIFT_MASK | IBUS_CONTROL_MASK))) {
++    if (keyval == IBUS_F && scmshm_test (modifiers, (IBUS_SHIFT_MASK | IBUS_CONTROL_MASK))) {
+         m_props.toggleModeSimp();
+         m_prev_pressed_key = IBUS_F;
+         return TRUE;
+@@ -99,7 +99,7 @@ PinyinEngine::processKeyEvent (guint keyval, guint keycode, guint modifiers)
+ 
+     if (m_props.modeChinese ()) {
+         if (m_input_mode == MODE_INIT &&
+-            ((CMSHM_FILTER (modifiers)) == 0)) {
++            ((cmshm_filter (modifiers)) == 0)) {
+             const String & text = m_editors[MODE_INIT]->text ();
+             if (text.empty ()) {
+                 switch (keyval) {
+@@ -169,6 +169,34 @@ PinyinEngine::focusIn (void)
+ 
+ 
+ void
++PinyinEngine::focusOut (void)
++{
++    reset ();
++}
++
++void
++PinyinEngine::reset (void)
++{
++    m_prev_pressed_key = IBUS_VoidSymbol;
++    m_input_mode = MODE_INIT;
++    for (gint i = 0; i < MODE_LAST; i++) {
++        m_editors[i]->reset ();
++    }
++    m_fallback_editor->reset ();
++}
++
++void
++PinyinEngine::enable (void)
++{
++    m_props.reset ();
++}
++
++void
++PinyinEngine::disable (void)
++{
++}
++
++void
+ PinyinEngine::pageUp (void)
+ {
+     m_editors[m_input_mode]->pageUp ();
+diff --git a/src/PinyinEngine.h b/src/PinyinEngine.h
+index 971bc6e..96bf731 100644
+--- a/src/PinyinEngine.h
++++ b/src/PinyinEngine.h
+@@ -31,30 +31,17 @@ public:
+     PinyinEngine (IBusEngine *engine);
+     ~PinyinEngine (void);
+ 
++    // virtual functions
+     gboolean processKeyEvent (guint keyval, guint keycode, guint modifiers);
+     void focusIn (void);
+-    void focusOut (void) {
+-        reset ();
+-    }
+-
+-    void reset (void) {
+-        m_prev_pressed_key = IBUS_VoidSymbol;
+-        m_input_mode = MODE_INIT;
+-        for (gint i = 0; i < MODE_LAST; i++) {
+-            m_editors[i]->reset ();
+-        }
+-        m_fallback_editor->reset ();
+-    }
+-
+-    void enable (void) {
+-        m_props.reset ();
+-    }
+-    void disable (void) {}
++    void focusOut (void);
++    void reset (void);
++    void enable (void);
++    void disable (void);
+     void pageUp (void);
+     void pageDown (void);
+     void cursorUp (void);
+     void cursorDown (void);
+-
+     gboolean propertyActivate (const gchar *prop_name, guint prop_state);
+     void candidateClicked (guint index, guint button, guint state);
+ 
+diff --git a/src/PinyinParser.cc b/src/PinyinParser.cc
+index 4a2e826..c419724 100644
+--- a/src/PinyinParser.cc
++++ b/src/PinyinParser.cc
+@@ -21,7 +21,6 @@
+ 
+ #include <cstring>
+ #include <cstdlib>
+-#include <glib.h>
+ #include "PinyinParser.h"
+ 
+ namespace PY {
+diff --git a/src/PinyinParser.h b/src/PinyinParser.h
+index 918c086..b948197 100644
+--- a/src/PinyinParser.h
++++ b/src/PinyinParser.h
+@@ -35,13 +35,14 @@ public:
+                         PinyinArray  &result,      // store pinyin in result
+                         guint         max);        // max length of the result
+     static const Pinyin * isPinyin (gint sheng, gint yun, guint option);
+-    static guint parseBopomofo (const std::wstring   &bopomofo,
+-                                 gint            len,
+-                                 guint           option,
+-                                 PinyinArray    &result,
+-                                 guint           max);
++    static guint parseBopomofo (const std::wstring  &bopomofo,
++                                gint                 len,
++                                guint                option,
++                                PinyinArray         &result,
++                                guint                max);
+     static gboolean isBopomofoToneChar (const wchar_t ch);
+ 
+ };
++
+ };
+ #endif
+diff --git a/src/PinyinProperties.cc b/src/PinyinProperties.cc
+index 16c037b..b02eb83 100644
+--- a/src/PinyinProperties.cc
++++ b/src/PinyinProperties.cc
+@@ -18,7 +18,6 @@
+  * along with this program; if not, write to the Free Software
+  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+-#include <string>
+ #include "PinyinProperties.h"
+ 
+ namespace PY {
+diff --git a/src/PinyinProperties.h b/src/PinyinProperties.h
+index e48c5f0..30e7720 100644
+--- a/src/PinyinProperties.h
++++ b/src/PinyinProperties.h
+@@ -41,20 +41,23 @@ public:
+ 
+     void reset (void);
+ 
+-    gboolean modeChinese (void) { return m_mode_chinese; }
+-    gboolean modeFull (void) { return m_mode_full; }
+-    gboolean modeFullPunct (void) { return m_mode_full_punct; }
+-    gboolean modeSimp (void) { return m_mode_simp; }
++    gboolean modeChinese (void) const   { return m_mode_chinese; }
++    gboolean modeFull (void) const      { return m_mode_full; }
++    gboolean modeFullPunct (void) const { return m_mode_full_punct; }
++    gboolean modeSimp (void) const      { return m_mode_simp; }
++
++    PropList & properties (void)        { return m_props; }
+ 
+     gboolean propertyActivate (const gchar *prop_name, guint prop_state);
+-    PropList & properties (void) { return m_props; }
+ 
+-    signal <void (Property &)> & signalUpdateProperty  (void) {
++    signal <void (Property &)> & signalUpdateProperty (void)
++    {
+         return m_signal_update_property;
+     }
+ 
+ private:
+-    void updateProperty (Property & prop) {
++    void updateProperty (Property & prop) const
++    {
+         m_signal_update_property (prop);
+     }
+ 
+diff --git a/src/Pointer.h b/src/Pointer.h
+index 7678e83..1a48b97 100644
+--- a/src/Pointer.h
++++ b/src/Pointer.h
+@@ -28,15 +28,18 @@ namespace PY {
+ template<typename T>
+ struct Pointer {
+ public:
+-    Pointer (T *p = NULL) : m_p (NULL) {
++    Pointer (T *p = NULL) : m_p (NULL)
++    {
+         set (p);
+     }
+ 
+-    ~Pointer (void) {
++    ~Pointer (void)
++    {
+         set (NULL);
+     }
+ 
+-    void set (T * p) {
++    void set (T * p)
++    {
+         if (m_p) {
+             g_object_unref (m_p);
+         }
+@@ -50,29 +53,35 @@ public:
+         }
+     }
+ 
+-    Pointer<T> &operator = (T *p) {
++    Pointer<T> &operator = (T *p)
++    {
+         set (p);
+         return *this;
+     }
+ 
+-    Pointer<T> &operator = (const Pointer<T> & p) {
++    Pointer<T> &operator = (const Pointer<T> & p)
++    {
+         set (p.m_p);
+         return *this;
+     }
+ 
+-    const T * operator-> (void) const {
++    const T * operator-> (void) const
++    {
+         return m_p;
+     }
+ 
+-    T * operator-> (void) {
++    T * operator-> (void)
++    {
+         return m_p;
+     }
+ 
+-    operator T * (void) const {
++    operator T * (void) const
++    {
+         return m_p;
+     }
+ 
+-    operator gboolean (void) const {
++    operator gboolean (void) const
++    {
+         return m_p != NULL;
+     }
+ 
+diff --git a/src/Property.h b/src/Property.h
+index 2bbb6b8..09429c4 100644
+--- a/src/Property.h
++++ b/src/Property.h
+@@ -40,23 +40,28 @@ public:
+               IBusPropList  *props = NULL)
+         : Object (ibus_property_new (key, type, label, icon, tooltip, sensitive, visible, state, props)) { }
+ 
+-    void setLabel (IBusText *text) {
++    void setLabel (IBusText *text)
++    {
+         ibus_property_set_label (get<IBusProperty> (), text);
+     }
+ 
+-    void setLabel (const gchar *text) {
++    void setLabel (const gchar *text)
++    {
+         setLabel (Text (text));
+     }
+ 
+-    void setIcon (const gchar *icon) {
++    void setIcon (const gchar *icon)
++    {
+         ibus_property_set_icon (get<IBusProperty> (), icon);
+     }
+ 
+-    void setSensitive (gboolean sensitive) {
++    void setSensitive (gboolean sensitive)
++    {
+         ibus_property_set_sensitive (get<IBusProperty> (), sensitive);
+     }
+ 
+-    operator IBusProperty * (void) const {
++    operator IBusProperty * (void) const
++    {
+         return get<IBusProperty> ();
+     }
+ };
+@@ -66,11 +71,13 @@ class PropList : Object {
+ public:
+     PropList (void) : Object (ibus_prop_list_new ()) { }
+ 
+-    void append (Property &prop) {
++    void append (Property &prop)
++    {
+         ibus_prop_list_append (get<IBusPropList> (), prop);
+     }
+ 
+-    operator IBusPropList * (void) const {
++    operator IBusPropList * (void) const
++    {
+         return get<IBusPropList> ();
+     }
+ };
+diff --git a/src/PunctEditor.cc b/src/PunctEditor.cc
+index 32b7ce9..65c6494 100644
+--- a/src/PunctEditor.cc
++++ b/src/PunctEditor.cc
+@@ -19,7 +19,6 @@
+  * along with this program; if not, write to the Free Software
+  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+-#include <cstdio>
+ #include "PunctEditor.h"
+ 
+ namespace PY {
+@@ -79,7 +78,7 @@ PunctEditor::processSpace (guint keyval, guint keycode, guint modifiers)
+ {
+     if (m_punct_mode != MODE_INIT && m_punct_mode != MODE_NORMAL)
+         return FALSE;
+-    if (CMSHM_FILTER (modifiers) != 0)
++    if (cmshm_filter (modifiers) != 0)
+         return TRUE;
+     commit ();
+     return TRUE;
+@@ -88,7 +87,7 @@ PunctEditor::processSpace (guint keyval, guint keycode, guint modifiers)
+ gboolean
+ PunctEditor::processPunct (guint keyval, guint keycode, guint modifiers)
+ {
+-    if (CMSHM_FILTER (modifiers) != 0)
++    if (cmshm_filter (modifiers) != 0)
+         return TRUE;
+ 
+     if (m_punct_mode == MODE_DISABLE) {
+diff --git a/src/PunctEditor.h b/src/PunctEditor.h
+index ae3d4a5..1c057bd 100644
+--- a/src/PunctEditor.h
++++ b/src/PunctEditor.h
+@@ -24,7 +24,6 @@
+ 
+ #include <glib.h>
+ #include "Editor.h"
+-#include "PhraseEditor.h"
+ 
+ namespace PY {
+ 
+diff --git a/src/SimpTradConverter.cc b/src/SimpTradConverter.cc
+index 831943d..96331c8 100644
+--- a/src/SimpTradConverter.cc
++++ b/src/SimpTradConverter.cc
+@@ -20,7 +20,6 @@
+  */
+ #include <cstdlib>
+ #include <cwchar>
+-#include <glib.h>
+ #include <glib-object.h>
+ #include "SimpTradConverter.h"
+ 
+diff --git a/src/SpecialPhrase.h b/src/SpecialPhrase.h
+index d8a16b1..669ff7f 100644
+--- a/src/SpecialPhrase.h
++++ b/src/SpecialPhrase.h
+@@ -32,7 +32,8 @@ public:
+     SpecialPhrase (guint pos) : m_position (pos) { }
+     virtual ~SpecialPhrase (void);
+ 
+-    guint position (void) const {
++    guint position (void) const
++    {
+         return m_position;
+     }
+ 
+diff --git a/src/SpecialPhraseTable.cc b/src/SpecialPhraseTable.cc
+index d79978d..d73bb5b 100644
+--- a/src/SpecialPhraseTable.cc
++++ b/src/SpecialPhraseTable.cc
+@@ -18,10 +18,7 @@
+  * along with this program; if not, write to the Free Software
+  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+  */
+-#include <iostream>
+ #include <fstream>
+-#include <string>
+-#include "Config.h"
+ #include "DynamicSpecialPhrase.h"
+ #include "SpecialPhraseTable.h"
+ 
+@@ -58,9 +55,6 @@ SpecialPhraseTable::lookup (const std::string         &command,
+ {
+     result.clear ();
+ 
+-    if (!PinyinConfig::instance ().specialPhrases ())
+-        return FALSE;
+-
+     std::pair<Map::iterator, Map::iterator> range = m_map.equal_range (command);
+     for (Map::iterator it = range.first; it != range.second; it ++) {
+         result.push_back ((*it).second->text ());
+diff --git a/src/SpecialPhraseTable.h b/src/SpecialPhraseTable.h
+index dc636e7..468b929 100644
+--- a/src/SpecialPhraseTable.h
++++ b/src/SpecialPhraseTable.h
+@@ -22,7 +22,6 @@
+ #define __PY_SPECIAL_PHRASE_TABLE_H_
+ 
+ #include <map>
+-#include <list>
+ #include <string>
+ #include <vector>
+ #include <glib.h>
+diff --git a/src/String.h b/src/String.h
+index e5739bb..743e367 100644
+--- a/src/String.h
++++ b/src/String.h
+@@ -29,10 +29,12 @@ namespace PY {
+ 
+ class String : public std::string {
+ public:
+-    String () : std::string () {}
+-    String (const gchar *str) : std::string (str) {}
++    String () : std::string () { }
++    String (const gchar *str) : std::string (str) { }
+     String (gint len) : std::string () { reserve (len); }
+-    String & printf (const gchar *fmt, ...) {
++
++    String & printf (const gchar *fmt, ...)
++    {
+         gchar *str;
+         va_list args;
+ 
+@@ -45,7 +47,8 @@ public:
+         return *this;
+     }
+ 
+-    String & appendPrintf (const gchar *fmt, ...) {
++    String & appendPrintf (const gchar *fmt, ...)
++    {
+         gchar *str;
+         va_list args;
+ 
+@@ -59,7 +62,8 @@ public:
+         return *this;
+     }
+ 
+-    String & appendUnichar (gunichar ch) {
++    String & appendUnichar (gunichar ch)
++    {
+         gchar str[12];
+         gint len;
+         len = g_unichar_to_utf8 (ch, str);
+@@ -68,39 +72,47 @@ public:
+         return *this;
+     }
+ 
+-    String & insert (gint i, gchar ch) {
++    String & insert (gint i, gchar ch)
++    {
+         std::string::insert (i, 1, ch);
+         return *this;
+     }
+ 
+-    String & truncate (guint len) {
++    String & truncate (guint len)
++    {
+         erase(len);
+         return *this;
+     }
+ 
+-    gsize utf8Length (void) const {
++    gsize utf8Length (void) const
++    {
+         return g_utf8_strlen (c_str(), -1);
+     }
+ 
+-    String & operator<< (gint i) {
++    String & operator<< (gint i)
++    {
+         return appendPrintf ("%d", i);
+     }
+ 
+-    String & operator<< (guint i) {
++    String & operator<< (guint i)
++    {
+         return appendPrintf ("%u", i);
+     }
+ 
+-    String & operator<< (const gchar ch) {
++    String & operator<< (const gchar ch)
++    {
+         append (1, ch);
+         return *this;
+     }
+ 
+-    String & operator<< (const gchar *str) {
++    String & operator<< (const gchar *str)
++    {
+         append (str);
+         return *this;
+     }
+ 
+-    String & operator<< (const gunichar *wstr) {
++    String & operator<< (const gunichar *wstr)
++    {
+         gchar *str;
+         GError *error;
+         str = g_ucs4_to_utf8 (wstr, -1, NULL, NULL, &error);
+@@ -115,24 +127,29 @@ public:
+         return *this;
+     }
+ 
+-    String & operator<< (const std::string &str) {
++    String & operator<< (const std::string &str)
++    {
+         return operator<< (str.c_str ());
+     }
+ 
+-    String & operator<< (const String &str) {
++    String & operator<< (const String &str)
++    {
+         return operator<< ((const gchar *)str);
+     }
+ 
+-    String & operator= (const gchar * str) {
++    String & operator= (const gchar * str)
++    {
+         assign (str);
+         return *this;
+     }
+ 
+-    operator const gchar *(void) const {
++    operator const gchar *(void) const
++    {
+         return this->c_str ();
+     }
+ 
+-    operator gboolean (void) const {
++    operator gboolean (void) const
++    {
+         return ! empty ();
+     }
+ };
+diff --git a/src/Text.h b/src/Text.h
+index 58ea320..f286eb1 100644
+--- a/src/Text.h
++++ b/src/Text.h
+@@ -30,25 +30,28 @@ namespace PY {
+ class Text : Object {
+ public:
+     Text (IBusText *text)
+-        : Object (text) {}
++        : Object (text) { }
+     Text (const gchar *str)
+-        : Object (ibus_text_new_from_string (str)) {}
++        : Object (ibus_text_new_from_string (str)) { }
+ 
+     Text (const std::string & str)
+-        : Object (ibus_text_new_from_string (str.c_str ())) {}
++        : Object (ibus_text_new_from_string (str.c_str ())) { }
+ 
+     Text (gunichar ch)
+-        : Object (ibus_text_new_from_unichar (ch)) {}
++        : Object (ibus_text_new_from_unichar (ch)) { }
+ 
+-    void appendAttribute (guint type, guint value, guint start, guint end) {
++    void appendAttribute (guint type, guint value, guint start, guint end)
++    {
+         ibus_text_append_attribute (get<IBusText> (), type, value, start, end);
+     }
+ 
+-    const gchar *text (void) const {
++    const gchar *text (void) const
++    {
+         return get<IBusText> ()->text;
+     }
+ 
+-    operator IBusText * (void) const {
++    operator IBusText * (void) const
++    {
+         return get<IBusText> ();
+     }
+ };
+@@ -56,16 +59,16 @@ public:
+ class StaticText : public Text {
+ public:
+     StaticText (const gchar *str)
+-        : Text (ibus_text_new_from_static_string (str)) {
+-    }
++        : Text (ibus_text_new_from_static_string (str)) { }
+ 
+     StaticText (const std::string & str)
+-        : Text (ibus_text_new_from_static_string (str.c_str ())) {}
++        : Text (ibus_text_new_from_static_string (str.c_str ())) { }
+ 
+     StaticText (gunichar ch)
+-        : Text (ch) {}
++        : Text (ch) { }
+ 
+-    operator IBusText * (void) const {
++    operator IBusText * (void) const
++    {
+         return Text::operator IBusText * ();
+     }
+ };
+diff --git a/src/Util.h b/src/Util.h
+index 1a7d6e4..bb3a712 100644
+--- a/src/Util.h
++++ b/src/Util.h
+@@ -35,38 +35,47 @@
+ #include <cstdlib>
+ #include <string>
+ 
+-namespace PY {
+-
+-#define CMSHM_MASK              \
+-        (IBUS_CONTROL_MASK |    \
+-         IBUS_MOD1_MASK |       \
+-         IBUS_SUPER_MASK |      \
+-         IBUS_HYPER_MASK |      \
+-         IBUS_META_MASK)
+-
+-#define SCMSHM_MASK             \
+-        (IBUS_SHIFT_MASK |      \
+-         IBUS_CONTROL_MASK |    \
+-         IBUS_MOD1_MASK |       \
+-         IBUS_SUPER_MASK |      \
+-         IBUS_HYPER_MASK |      \
+-         IBUS_META_MASK)
++#include <ibus.h>
+ 
+-#define CMSHM_FILTER(modifiers)  \
+-    (modifiers & (CMSHM_MASK))
+-
+-#define SCMSHM_FILTER(modifiers)  \
+-    (modifiers & (SCMSHM_MASK))
+-
+-#define CMSHM_TEST(modifiers, mask) \
+-    (CMSHM_FILTER (modifiers) == (mask))
++namespace PY {
+ 
+-#define SCMSHM_TEST(modifiers, mask) \
+-    (SCMSHM_FILTER (modifiers) == (mask))
++// mask for Ctrl, Alt, Super, Hyper, Meta
++const guint CMSHM_MASK = IBUS_CONTROL_MASK |
++                         IBUS_MOD1_MASK |
++                         IBUS_SUPER_MASK |
++                         IBUS_HYPER_MASK |
++                         IBUS_META_MASK;
++// mask for Shift, Ctrl, Alt, Super, Hyper, Meta
++const guint SCMSHM_MASK = CMSHM_MASK | IBUS_SHIFT_MASK;
++
++inline guint
++cmshm_filter (guint modifiers)
++{
++    return modifiers & CMSHM_MASK;
++}
++
++inline guint
++scmshm_filter (guint modifiers)
++{
++    return modifiers & SCMSHM_MASK;
++}
++
++inline gboolean
++cmshm_test (guint modifiers, guint mask)
++{
++    return cmshm_filter (modifiers) == mask;
++}
++
++inline gboolean
++scmshm_test (guint modifiers, guint mask)
++{
++    return scmshm_filter (modifiers) == mask;
++}
+ 
+ class UUID {
+ public:
+-    UUID (void) {
++    UUID (void)
++    {
+         uuid_t u;
+ #if defined(HAVE_UUID_CREATE)
+         gchar* uuid;
+@@ -80,7 +89,8 @@ public:
+ #endif
+     }
+ 
+-    operator const gchar * (void) const {
++    operator const gchar * (void) const
++    {
+         return m_uuid;        
+     }
+ 
+@@ -90,7 +100,8 @@ private:
+ 
+ class Uname {
+ public:
+-    Uname (void) {
++    Uname (void)
++    {
+         uname (&m_buf);
+     }
+ 
+@@ -101,20 +112,23 @@ private:
+ 
+ class Hostname : public Uname {
+ public:
+-    operator const gchar * (void) const {
++    operator const gchar * (void) const
++    {
+         return hostname ();
+     }
+ };
+ 
+ class Env : public std::string {
+ public:
+-    Env (const gchar *name) {
++    Env (const gchar *name)
++    {
+         gchar *str;
+         str = std::getenv (name);
+         assign (str != NULL ? str : "");
+     }
+ 
+-    operator const gchar *(void) const {
++    operator const gchar *(void) const
++    {
+         return c_str();
+     }
+ };
